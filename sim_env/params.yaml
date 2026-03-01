@@ -1,0 +1,14 @@
+# Human Model Parameters
+human_model:
+  # Rectangle dimensions (in meters)
+  width: 0.4      # Width of the rectangle (shoulder width)
+  height: 1.7     # Height of the rectangle (typical human height)
+  depth: 0.2      # Depth of the rectangle (front-to-back)
+  mass: 70.0      # Mass in kg
+  
+  # Visual properties
+  color:
+    r: 0.8
+    g: 0.6
+    b: 0.5
+    a: 1.0
