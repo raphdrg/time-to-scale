@@ -10,7 +10,7 @@ def colorize(pcd):
     if not pcd.has_colors():
         points = np.asarray(pcd.points)
         z = points[:, 2]
-        z_norm = (z - z.min()) / (z.ptp() + 1e-9)
+        z_norm = (z - z.min()) / (np.ptp(z) + 1e-9)
         colors = np.stack([z_norm, 0.4 * np.ones_like(z_norm), 1 - z_norm], axis=1)
         pcd.colors = o3d.utility.Vector3dVector(colors)
     return pcd
