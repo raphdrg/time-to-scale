@@ -1,5 +1,5 @@
 lidar:
-  port: /dev/tty.SLAB_USBtoUART
+  port: /dev/tty.usbserial-10
   baudrate: 460800
   timeout: 3
   scan_mode: 4          # express scan mode (4 = boost mode for C1)
