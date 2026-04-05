@@ -45,11 +45,25 @@ class LidarReader:
         print("LIDAR reader started.")
 
     def _read_loop(self):
-        scan_generator = self._lidar.start_scan_express(self.scan_mode)
+        # Try express scan first; fall back to standard scan if not supported
+        try:
+            scan_generator = self._lidar.start_scan_express(self.scan_mode)
+            # peek to confirm it works
+            gen = scan_generator()
+            first = next(gen)
+            print(f"Express scan mode {self.scan_mode} active.")
+        except Exception as e:
+            print(f"Express scan mode {self.scan_mode} failed ({e}), falling back to standard scan.")
+            self._lidar.stop()
+            scan_generator = self._lidar.start_scan()
+            gen = scan_generator()
+            first = next(gen)
+
+        import itertools
         pending = []
         prev_angle = None
 
-        for measurement in scan_generator():
+        for measurement in itertools.chain([first], gen):
             if not self._running:
                 break
 

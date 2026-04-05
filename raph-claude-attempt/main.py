@@ -7,7 +7,6 @@ Run: python main.py
 """
 
 import sys
-import time
 import yaml
 import numpy as np
 import matplotlib
@@ -141,7 +140,7 @@ def main():
     ani = animation.FuncAnimation(
         fig, update,
         interval=refresh_interval_ms,
-        blit=True,
+        blit=False,
         cache_frame_data=False,
     )
 
