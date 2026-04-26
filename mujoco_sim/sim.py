@@ -61,7 +61,7 @@ def read_imu(data, accel_adr, gyro_adr):
 
 def set_drive(data, forward, turn):
     """Set motor controls. forward/turn in [-1, 1].
-    Left wheels = forward + turn, right wheels = forward - turn."""
+    Left pair = forward + turn, right pair = forward - turn."""
     left = np.clip(forward + turn, -1, 1)
     right = np.clip(forward - turn, -1, 1)
     data.ctrl[0] = left    # FL
