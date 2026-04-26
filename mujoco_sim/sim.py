@@ -1,248 +1,284 @@
 """
-MuJoCo simulation: 4-wheeled mobile base with simulated lidar + IMU.
+MuJoCo simulation: 4-wheeled mobile base with simulated LiDAR + IMU.
 
-Usage:
-    python mujoco_sim/sim.py              # auto-drive, shows matplotlib map at end
-    mjpython mujoco_sim/sim.py --viewer   # interactive viewer with WASD driving (macOS needs mjpython)
+Usage
+-----
+Auto-drive (headless, scripted path):
+    python mujoco_sim/sim.py
+    python mujoco_sim/sim.py --random          # random world
+    python mujoco_sim/sim.py --random --seed 7 # reproducible random world
+
+Interactive viewer + live mapping (requires mjpython on macOS):
+    mjpython mujoco_sim/sim.py --viewer
+    mjpython mujoco_sim/sim.py --viewer --random
+    mjpython mujoco_sim/sim.py --viewer --random --seed 42
+
+In viewer mode: drive with arrow keys, close the window → map_output.png is saved.
 """
 
 import argparse
-import math
+import os
 import sys
 import time
+
 import numpy as np
 import mujoco
 import mujoco.viewer
-import matplotlib.pyplot as plt
+
+sys.path.insert(0, os.path.dirname(__file__))
+from sensors   import IMUSensor, LiDARSensor
+from mapper    import OccupancyGrid
+from world_gen import generate_world_xml
 
 
-# ---------- config ----------
-MODEL_PATH = "mujoco_sim/model.xml"
-SIM_DURATION = 10.0
-LIDAR_RANGE = 8.0
-LIDAR_NUM_RAYS = 180
-LIDAR_RATE_HZ = 10
-MAP_SAVE_PATH = "mujoco_sim/map_output.png"
+# ── Config ────────────────────────────────────────────────────────────────────
 
-# Drive params (ctrl is torque via motor, range [-1, 1])
-DRIVE_CTRL = 0.4        # forward/back throttle
-TURN_CTRL = 0.3         # turn throttle
+MODEL_PATH    = os.path.join(os.path.dirname(__file__), "model.xml")
+MAP_SAVE_PATH = os.path.join(os.path.dirname(__file__), "map_output.png")
 
+SIM_DURATION  = 10.0   # seconds (auto mode only)
+LIDAR_RATE_HZ = 10     # LiDAR sweeps per second
 
-def build_lidar_directions(num_rays):
-    angles = np.linspace(0, 2 * math.pi, num_rays, endpoint=False)
-    dirs = np.stack([np.cos(angles), np.sin(angles), np.zeros(num_rays)], axis=1)
-    return dirs
+DRIVE_CTRL     = 0.4   # forward/back throttle  [-1, 1]
+TURN_CTRL      = 0.3   # turn throttle
+VIEWER_FPS     = 60
+IMPULSE_FRAMES = 15    # frames a key press stays active  (~0.25 s at 60 fps)
 
 
-def do_lidar_sweep(model, data, site_id, directions, base_body_id):
-    lidar_pos = data.site_xpos[site_id].copy()
-    lidar_rot = data.site_xmat[site_id].reshape(3, 3)
+# ── Shared sensor config ──────────────────────────────────────────────────────
 
-    hits = []
-    for d_local in directions:
-        d_world = lidar_rot @ d_local
-        geom_id = np.array([-1], dtype=np.int32)
-        dist = mujoco.mj_ray(
-            model, data, lidar_pos, d_world,
-            None, 1, base_body_id, geom_id,
-        )
-        if 0 < dist < LIDAR_RANGE:
-            hit = lidar_pos + d_world * dist
-            hits.append(hit[:2])
-    return np.array(hits) if hits else np.empty((0, 2))
-
-
-def read_imu(data, accel_adr, gyro_adr):
-    accel = data.sensordata[accel_adr:accel_adr + 3].copy()
-    gyro = data.sensordata[gyro_adr:gyro_adr + 3].copy()
-    return accel, gyro
+def _make_sensors(model):
+    """Instantiate IMU and LiDAR with consistent settings."""
+    imu = IMUSensor(
+        model,
+        noise_accel=0.02,
+        noise_gyro=0.002,
+        bias_accel_drift=1e-4,
+        bias_gyro_drift=1e-5,
+    )
+    lidar = LiDARSensor(
+        model,
+        num_rays=360,
+        max_range=8.0,
+        min_range=0.05,
+        noise_std=0.01,
+        elevation_angles=[0.0],   # 2D horizontal scan
+    )
+    return imu, lidar
 
 
-def set_drive(data, forward, turn):
-    """Set motor controls. forward/turn in [-1, 1].
-    Left wheels = forward + turn, right wheels = forward - turn."""
-    left = np.clip(forward + turn, -1, 1)
+def _make_map():
+    """Create a fresh occupancy grid sized for the default world."""
+    return OccupancyGrid(width_m=22.0, height_m=22.0, resolution=0.05)
+
+
+# ── Drive helpers ─────────────────────────────────────────────────────────────
+
+def auto_drive_policy(t: float):
+    """Fixed scripted drive pattern.  Returns (forward, turn) in [-1, 1]."""
+    if   t < 2.0: return DRIVE_CTRL, 0.0
+    elif t < 3.5: return 0.0,        TURN_CTRL
+    elif t < 5.5: return DRIVE_CTRL, 0.0
+    elif t < 7.0: return 0.0,        TURN_CTRL
+    elif t < 9.0: return DRIVE_CTRL, 0.0
+    else:         return 0.0,        0.0
+
+
+def set_drive(data, forward: float, turn: float):
+    """Differential drive — ctrl order: FL, FR, RL, RR."""
+    left  = np.clip(forward + turn, -1, 1)
     right = np.clip(forward - turn, -1, 1)
-    data.ctrl[0] = left    # FL
-    data.ctrl[1] = right   # FR
-    data.ctrl[2] = left    # RL
-    data.ctrl[3] = right   # RR
+    data.ctrl[0] = left;  data.ctrl[1] = right
+    data.ctrl[2] = left;  data.ctrl[3] = right
 
 
-# ── Auto-drive ──────────────────────────────────
-
-def auto_drive_policy(t):
-    """Returns (forward, turn) each in [-1, 1]."""
-    if t < 2.0:
-        return DRIVE_CTRL, 0.0
-    elif t < 3.5:
-        return 0.0, TURN_CTRL
-    elif t < 5.5:
-        return DRIVE_CTRL, 0.0
-    elif t < 7.0:
-        return 0.0, TURN_CTRL
-    elif t < 9.0:
-        return DRIVE_CTRL, 0.0
-    else:
-        return 0.0, 0.0
-
+# ── Auto run ──────────────────────────────────────────────────────────────────
 
 def run_auto(model, data):
-    accel_adr = model.sensor_adr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel")]
-    gyro_adr = model.sensor_adr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")]
+    """
+    Headless run: scripted drive, full sensor logging, saves map at the end.
+    """
+    dt = model.opt.timestep
+    imu, lidar = _make_sensors(model)
+    occ_map     = _make_map()
+
     lidar_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar_site")
-    base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
+    lidar_period  = 1.0 / LIDAR_RATE_HZ
+    next_lidar_t  = 0.0
 
-    lidar_dirs = build_lidar_directions(LIDAR_NUM_RAYS)
-    lidar_period = 1.0 / LIDAR_RATE_HZ
-    next_lidar_time = 0.0
-
-    all_hits = []
+    imu_log    = []
+    lidar_log  = []
     trajectory = []
-    imu_log = []
 
-    print(f"Running auto-drive for {SIM_DURATION}s ...")
+    print(f"Auto-drive for {SIM_DURATION}s  |  "
+          f"physics {1/dt:.0f} Hz  |  LiDAR {LIDAR_RATE_HZ} Hz  |  "
+          f"map {occ_map.cols}×{occ_map.rows} @ {occ_map.res}m/cell")
 
     while data.time < SIM_DURATION:
-        fwd, turn = auto_drive_policy(data.time)
-        set_drive(data, fwd, turn)
+        set_drive(data, *auto_drive_policy(data.time))
         mujoco.mj_step(model, data)
 
-        accel, gyro = read_imu(data, accel_adr, gyro_adr)
-        imu_log.append({"t": data.time, "accel": accel, "gyro": gyro})
+        imu_log.append(imu.read(data, dt))
+        trajectory.append(data.site_xpos[lidar_site_id][:2].copy())
 
-        pos = data.site_xpos[lidar_site_id][:2].copy()
-        trajectory.append(pos)
+        if data.time >= next_lidar_t:
+            scan = lidar.sweep(model, data)
+            lidar_log.append(scan)
+            occ_map.update(scan)
+            next_lidar_t += lidar_period
 
-        if data.time >= next_lidar_time:
-            hits = do_lidar_sweep(model, data, lidar_site_id, lidar_dirs, base_body_id)
-            if len(hits) > 0:
-                all_hits.append(hits)
-            next_lidar_time += lidar_period
+    total_hits = sum(s.num_hits for s in lidar_log)
+    print(f"Done — {len(imu_log)} IMU samples  |  "
+          f"{len(lidar_log)} LiDAR sweeps  |  {total_hits} hits")
 
-    all_hits = np.concatenate(all_hits, axis=0) if all_hits else np.empty((0, 2))
-
-    print(f"Done. {len(all_hits)} lidar points, {len(imu_log)} IMU samples.")
-    accels = np.array([s["accel"] for s in imu_log])
-    gyros = np.array([s["gyro"] for s in imu_log])
-    print(f"Accel mean: {accels.mean(axis=0).round(3)}")
-    print(f"Gyro  mean: {gyros.mean(axis=0).round(3)}")
-
-    plot_map(all_hits, trajectory, MAP_SAVE_PATH)
+    occ_map.save(MAP_SAVE_PATH, trajectory=np.array(trajectory))
+    return imu_log, lidar_log, occ_map
 
 
-# ── Viewer mode ─────────────────────────────────
-
-VIEWER_FPS = 60
-IMPULSE_FRAMES = 15  # how many frames each key press drives for (~0.25s)
-
+# ── Viewer run ────────────────────────────────────────────────────────────────
 
 def run_viewer(model, data):
-    # Each key gets a countdown: when > 0 the command is active
+    """
+    Interactive viewer with live mapping.
+
+    - Drive the robot with WASD
+    - LiDAR sweeps and occupancy grid update run in the background every frame
+    - Close the window → map_output.png is saved automatically
+
+    On macOS this must be launched with mjpython, not python.
+    """
+    imu, lidar = _make_sensors(model)
+    occ_map     = _make_map()
+
+    lidar_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar_site")
+    base_body_id  = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
+    dt            = model.opt.timestep
+    lidar_period  = 1.0 / LIDAR_RATE_HZ
+    next_lidar_t  = 0.0
+
+    trajectory  = []
+    imu_log     = []
+    sweep_count = [0]
+
     impulse = {"fwd": 0, "turn": 0}
 
     def key_callback(keycode):
-        if keycode == 87:    # W
-            impulse["fwd"] = IMPULSE_FRAMES
-        elif keycode == 83:  # S
-            impulse["fwd"] = -IMPULSE_FRAMES
-        elif keycode == 65:  # A — turn left
-            impulse["turn"] = -IMPULSE_FRAMES
-        elif keycode == 68:  # D — turn right
-            impulse["turn"] = IMPULSE_FRAMES
+        if   keycode == 265: impulse["fwd"]  =  IMPULSE_FRAMES  # ↑ forward
+        elif keycode == 264: impulse["fwd"]  = -IMPULSE_FRAMES  # ↓ back
+        elif keycode == 263: impulse["turn"] =  IMPULSE_FRAMES  # ← turn left
+        elif keycode == 262: impulse["turn"] = -IMPULSE_FRAMES  # → turn right
 
-    print("WASD to drive (tap). Close window to exit.")
-    print("  W/S = nudge forward/back    A/D = nudge left/right")
+    print("Viewer ready — arrow keys to drive (tap).  Close window to save map.")
+    print("  ↑/↓ = forward/back    ←/→ = turn left/right")
 
-    steps_per_frame = int(1.0 / (model.opt.timestep * VIEWER_FPS))
-    base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
+    steps_per_frame = max(1, int(1.0 / (dt * VIEWER_FPS)))
+
+    _SUPPRESS = [
+        mujoco.mjtVisFlag.mjVIS_CONTACTPOINT,
+        mujoco.mjtVisFlag.mjVIS_CONTACTFORCE,
+        mujoco.mjtVisFlag.mjVIS_INERTIA,
+        mujoco.mjtVisFlag.mjVIS_COM,
+        mujoco.mjtVisFlag.mjVIS_CONSTRAINT,
+        mujoco.mjtVisFlag.mjVIS_PERTFORCE,
+        mujoco.mjtVisFlag.mjVIS_PERTOBJ,
+    ]
 
     try:
-        with mujoco.viewer.launch_passive(model, data, key_callback=key_callback) as viewer:
-            # Set up camera to track the robot
-            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        with mujoco.viewer.launch_passive(
+            model, data, key_callback=key_callback
+        ) as viewer:
+            # Camera tracks the robot
+            viewer.cam.type        = mujoco.mjtCamera.mjCAMERA_TRACKING
             viewer.cam.trackbodyid = base_body_id
-            viewer.cam.distance = 4.0
-            viewer.cam.elevation = -30
-            viewer.cam.azimuth = 180
-            viewer.cam.lookat[2] = 0.2  # look slightly above ground
+            viewer.cam.distance    = 5.0
+            viewer.cam.elevation   = -35
+            viewer.cam.azimuth     = 180
+            viewer.cam.lookat[2]   = 0.2
 
             while viewer.is_running():
                 t0 = time.time()
 
-                # Force all debug visualization off every frame
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_INERTIA] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONSTRAINT] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
+                for flag in _SUPPRESS:
+                    viewer.opt.flags[flag] = False
 
-                fwd = 0.0
-                turn = 0.0
-                if impulse["fwd"] > 0:
-                    fwd = DRIVE_CTRL
-                    impulse["fwd"] -= 1
-                elif impulse["fwd"] < 0:
-                    fwd = -DRIVE_CTRL
-                    impulse["fwd"] += 1
-
-                if impulse["turn"] > 0:
-                    turn = TURN_CTRL
-                    impulse["turn"] -= 1
-                elif impulse["turn"] < 0:
-                    turn = -TURN_CTRL
-                    impulse["turn"] += 1
+                # --- Drive ---
+                fwd = turn = 0.0
+                if   impulse["fwd"]  > 0: fwd  =  DRIVE_CTRL; impulse["fwd"]  -= 1
+                elif impulse["fwd"]  < 0: fwd  = -DRIVE_CTRL; impulse["fwd"]  += 1
+                if   impulse["turn"] > 0: turn =  TURN_CTRL;  impulse["turn"] -= 1
+                elif impulse["turn"] < 0: turn = -TURN_CTRL;  impulse["turn"] += 1
 
                 set_drive(data, fwd, turn)
 
+                # --- Step physics ---
                 for _ in range(steps_per_frame):
                     mujoco.mj_step(model, data)
 
+                # --- IMU (every frame) ---
+                imu_log.append(imu.read(data, dt * steps_per_frame))
+
+                # --- LiDAR + mapping (at LIDAR_RATE_HZ) ---
+                if data.time >= next_lidar_t:
+                    scan = lidar.sweep(model, data)
+                    occ_map.update(scan)
+                    trajectory.append(data.site_xpos[lidar_site_id][:2].copy())
+                    sweep_count[0] += 1
+                    next_lidar_t += lidar_period
+
                 viewer.sync()
 
-                dt = time.time() - t0
-                remaining = 1.0 / VIEWER_FPS - dt
+                remaining = 1.0 / VIEWER_FPS - (time.time() - t0)
                 if remaining > 0:
                     time.sleep(remaining)
 
     except RuntimeError as e:
         if "mjpython" in str(e):
-            print("\nOn macOS run:  mjpython mujoco_sim/sim.py --viewer")
+            print("\nOn macOS run with mjpython:  mjpython mujoco_sim/sim.py --viewer [--random]")
             sys.exit(1)
         raise
 
+    # --- Viewer closed: save map ---
+    print(f"\nViewer closed — {sweep_count[0]} LiDAR sweeps recorded.")
+    if sweep_count[0] > 0:
+        occ_map.save(MAP_SAVE_PATH, trajectory=np.array(trajectory))
+    else:
+        print("No sweeps recorded — map not saved.")
 
-# ── Plot ────────────────────────────────────────
 
-def plot_map(all_hits, trajectory, save_path):
-    fig, ax = plt.subplots(figsize=(10, 10))
-    if len(all_hits) > 0:
-        ax.scatter(all_hits[:, 0], all_hits[:, 1], s=0.3, c="lime", alpha=0.6, label="lidar hits")
-    traj = np.array(trajectory)
-    ax.plot(traj[:, 0], traj[:, 1], "b-", linewidth=1.5, label="robot path")
-    ax.plot(traj[0, 0], traj[0, 1], "go", markersize=8, label="start")
-    ax.plot(traj[-1, 0], traj[-1, 1], "ro", markersize=8, label="end")
-    ax.set_aspect("equal")
-    ax.set_facecolor("black")
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_title("2D lidar map from MuJoCo simulation")
-    ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.2)
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"Map saved -> {save_path}")
-    plt.show()
-
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--viewer", action="store_true")
+    parser = argparse.ArgumentParser(description="MuJoCo LiDAR+IMU simulation")
+    parser.add_argument(
+        "--viewer", action="store_true",
+        help="Interactive WASD viewer with live mapping (requires mjpython on macOS)"
+    )
+    parser.add_argument(
+        "--random", action="store_true",
+        help="Generate a random world instead of using the fixed model.xml"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="RNG seed for the random world (omit for a different world each run)"
+    )
+    parser.add_argument(
+        "--obstacles", type=int, default=20,
+        help="Number of random obstacles (default: 20)"
+    )
     args = parser.parse_args()
 
-    model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+    # --- Build model ---
+    if args.random:
+        print(f"Generating random world  "
+              f"(obstacles={args.obstacles}, seed={args.seed})")
+        xml   = generate_world_xml(
+            num_obstacles=args.obstacles,
+            seed=args.seed,
+        )
+        model = mujoco.MjModel.from_xml_string(xml)
+    else:
+        model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+
     data = mujoco.MjData(model)
 
     if args.viewer:
