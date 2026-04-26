@@ -160,17 +160,18 @@ def run_viewer(model, data):
     sweep_count   = [0]
     trajectory    = []
 
-    active = {"fwd": False, "back": False, "left": False, "right": False}
+    # Speed level per direction: 0=off, 1=normal, 2=fast
+    speed = {"fwd": 0, "back": 0, "left": 0, "right": 0}
 
     def key_callback(keycode):
-        if   keycode == 265: active["fwd"]   = not active["fwd"];   active["back"]  = False
-        elif keycode == 264: active["back"]  = not active["back"];  active["fwd"]   = False
-        elif keycode == 263: active["left"]  = not active["left"];  active["right"] = False
-        elif keycode == 262: active["right"] = not active["right"]; active["left"]  = False
+        if   keycode == 265: speed["back"]  = 0; speed["fwd"]   = (speed["fwd"]   + 1) % 3
+        elif keycode == 264: speed["fwd"]   = 0; speed["back"]  = (speed["back"]  + 1) % 3
+        elif keycode == 263: speed["right"] = 0; speed["left"]  = (speed["left"]  + 1) % 3
+        elif keycode == 262: speed["left"]  = 0; speed["right"] = (speed["right"] + 1) % 3
         elif keycode == 32:
-            for k in active: active[k] = False
+            for k in speed: speed[k] = 0
 
-    print("Arrow keys to drive (toggle).  SPACE = stop.  Close window → map saved.")
+    print("Arrow keys: press once = normal, twice = fast, third = stop.  SPACE = stop all.")
     print("  ↑/↓ = forward/back    ←/→ = turn left/right")
 
     steps_per_frame = max(1, int(1.0 / (model.opt.timestep * VIEWER_FPS)))
@@ -189,10 +190,10 @@ def run_viewer(model, data):
                 t0 = time.time()
 
                 fwd = turn = 0.0
-                if active["fwd"]:   fwd  += DRIVE_CTRL
-                if active["back"]:  fwd  -= DRIVE_CTRL
-                if active["left"]:  turn -= TURN_CTRL
-                if active["right"]: turn += TURN_CTRL
+                fwd  += DRIVE_CTRL * speed["fwd"]
+                fwd  -= DRIVE_CTRL * speed["back"]
+                turn -= TURN_CTRL  * speed["left"]
+                turn += TURN_CTRL  * speed["right"]
 
                 set_drive(data, fwd, turn)
                 for _ in range(steps_per_frame):

@@ -38,15 +38,15 @@ mjpython mujoco_sim/main.py --viewer --random --seed 42
 
 ### Controls (viewer mode)
 
-| Key | Action |
-|-----|--------|
-| `↑` | Forward (toggle) |
-| `↓` | Reverse (toggle) |
-| `←` | Turn left (toggle) |
-| `→` | Turn right (toggle) |
-| `Space` | Stop all |
+| Key | 1st press | 2nd press | 3rd press |
+|-----|-----------|-----------|-----------|
+| `↑` | Forward (normal) | Forward (fast) | Stop |
+| `↓` | Reverse (normal) | Reverse (fast) | Stop |
+| `←` | Turn left (normal) | Turn left (fast) | Stop |
+| `→` | Turn right (normal) | Turn right (fast) | Stop |
+| `Space` | Stop all | — | — |
 
-Press once to start, press again to stop. Close the window to save the map.
+Each arrow key cycles through three states: **normal speed → fast → stop**. To stop turning or moving, just press the same key again until it stops. Pressing the opposite direction (e.g. `↑` while reversing) automatically cancels the current one. `Space` is an emergency stop that kills all movement. Close the window to save the map.
 
 ### View the map
 
