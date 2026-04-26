@@ -1,0 +1,96 @@
+<mujoco model="lidar_imu_bot">
+  <compiler angle="degree" coordinate="local"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <map znear="0.05" zfar="50"/>
+    <rgba contactpoint="0 0 0 0" contactforce="0 0 0 0"/>
+  </visual>
+
+  <default>
+    <joint damping="1" armature="0.01"/>
+    <geom friction="1.0 0.1 0.1" density="1000"/>
+  </default>
+
+  <asset>
+    <texture type="2d" name="grid" builtin="checker" width="512" height="512"
+             rgb1="0.3 0.3 0.3" rgb2="0.4 0.4 0.4"/>
+    <material name="grid_mat" texture="grid" texrepeat="10 10" texuniform="true"/>
+    <material name="wall_mat" rgba="0.6 0.2 0.2 1"/>
+  </asset>
+
+  <worldbody>
+    <geom name="ground" type="plane" size="10 10 0.1" material="grid_mat"/>
+
+    <!-- Barrier wall in front of spawn -->
+    <body name="barrier" pos="3 0 0.5">
+      <geom type="box" size="0.1 2 0.5" material="wall_mat"/>
+    </body>
+
+    <!-- Side walls -->
+    <body name="wall_left" pos="0 4 0.5">
+      <geom type="box" size="5 0.1 0.5" material="wall_mat"/>
+    </body>
+    <body name="wall_right" pos="0 -4 0.5">
+      <geom type="box" size="5 0.1 0.5" material="wall_mat"/>
+    </body>
+
+    <!-- ===== Mobile base ===== -->
+    <!-- Wheel radius=0.05. Chassis origin at z=0.05 so wheels touch ground. -->
+    <body name="base" pos="0 0 0.05">
+      <joint name="root" type="free"/>
+
+      <!-- Chassis: bottom at z=0.01 above wheel centre, won't scrape ground -->
+      <geom name="chassis" type="box" size="0.2 0.15 0.04" pos="0 0 0.05"
+            rgba="0.2 0.2 0.8 1"/>
+
+      <!-- IMU site -->
+      <site name="imu_site" pos="0 0 0.05" size="0.02"/>
+
+      <!-- Lidar tower + site -->
+      <geom type="cylinder" size="0.02 0.04" pos="0 0 0.13"
+            rgba="0.1 0.9 0.1 1" density="500"/>
+      <site name="lidar_site" pos="0 0 0.18" size="0.03"/>
+
+      <!-- Front Left wheel  (euler 90 0 0 rotates cylinder axis from Z to Y) -->
+      <body name="wheel_fl" pos="0.15 0.17 0">
+        <joint name="joint_fl" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.05 0.02" euler="90 0 0"
+              rgba="0.1 0.1 0.1 1"/>
+      </body>
+
+      <!-- Front Right wheel -->
+      <body name="wheel_fr" pos="0.15 -0.17 0">
+        <joint name="joint_fr" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.05 0.02" euler="90 0 0"
+              rgba="0.1 0.1 0.1 1"/>
+      </body>
+
+      <!-- Rear Left wheel -->
+      <body name="wheel_rl" pos="-0.15 0.17 0">
+        <joint name="joint_rl" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.05 0.02" euler="90 0 0"
+              rgba="0.1 0.1 0.1 1"/>
+      </body>
+
+      <!-- Rear Right wheel -->
+      <body name="wheel_rr" pos="-0.15 -0.17 0">
+        <joint name="joint_rr" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.05 0.02" euler="90 0 0"
+              rgba="0.1 0.1 0.1 1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <accelerometer name="imu_accel" site="imu_site"/>
+    <gyro          name="imu_gyro"  site="imu_site"/>
+  </sensor>
+
+  <actuator>
+    <motor name="motor_fl" joint="joint_fl" gear="50" ctrlrange="-1 1"/>
+    <motor name="motor_fr" joint="joint_fr" gear="50" ctrlrange="-1 1"/>
+    <motor name="motor_rl" joint="joint_rl" gear="50" ctrlrange="-1 1"/>
+    <motor name="motor_rr" joint="joint_rr" gear="50" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>
