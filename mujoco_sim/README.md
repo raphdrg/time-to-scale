@@ -1,79 +1,82 @@
-# MuJoCo Mobile Base Simulation
+# mujoco_sim
 
-Simulated 4-wheeled differential-drive robot with a 2D lidar and IMU. No hardware needed — everything runs in MuJoCo.
+MuJoCo-based robot simulation with simulated LiDAR and IMU, and occupancy grid mapping.
 
-## Quick Start
+## Setup
 
 ```bash
-# Auto-drive mode: robot drives a preset path, builds a 2D lidar map
-python mujoco_sim/sim.py
-
-# Interactive viewer: drive the robot manually with WASD
-mjpython mujoco_sim/sim.py --viewer
+uv venv --python /opt/homebrew/bin/python3.13 --clear
+source .venv/bin/activate
+uv pip install mujoco matplotlib numpy
 ```
 
-> **macOS note:** The interactive viewer requires `mjpython` (ships with the `mujoco` pip package) instead of `python`. This is a macOS graphics threading requirement.
+## Running
 
-## Controls (Viewer Mode)
+All commands are run from the project root (`time-to-scale/`).
+
+### Headless auto-drive
+
+The robot drives a scripted path and saves a map at the end.
+
+```bash
+python mujoco_sim/main.py
+python mujoco_sim/main.py --random
+python mujoco_sim/main.py --random --seed 42
+python mujoco_sim/main.py --random --obstacles 30
+```
+
+### Interactive viewer + live mapping
+
+Drive the robot yourself. The map is saved when you close the window.
+**macOS requires `mjpython`** (bundled with the mujoco package).
+
+```bash
+mjpython mujoco_sim/main.py --viewer
+mjpython mujoco_sim/main.py --viewer --random
+mjpython mujoco_sim/main.py --viewer --random --seed 42
+```
+
+### Controls (viewer mode)
 
 | Key | Action |
 |-----|--------|
-| UP    | Toggle forward |
-| DOWN  | Toggle backward |
-| LEFT  | Toggle turn left |
-| RIGHT | Toggle turn right |
-| SPACE | Stop all movement |
+| `↑` | Forward (toggle) |
+| `↓` | Reverse (toggle) |
+| `←` | Turn left (toggle) |
+| `→` | Turn right (toggle) |
+| `Space` | Stop all |
 
-Controls are **toggles**: press a key once to start, press the **same key again** to stop. For example, press LEFT to start turning left — the robot keeps turning until you press LEFT again. Pressing the opposite direction (e.g. RIGHT while turning left) automatically cancels the current direction. SPACE stops all movement immediately.
+Press once to start, press again to stop. Close the window to save the map.
 
-The camera automatically tracks the robot. You can still orbit and zoom with the mouse.
+### View the map
 
-## What's in the Simulation
+```bash
+open mujoco_sim/map_output.png
+```
 
-### Robot (`model.xml`)
+**Map legend:** white = free space, black = walls/obstacles, gray = unexplored.
 
-- **Chassis**: box body with a free joint (6-DOF)
-- **4 cylinder wheels**: hinge joints around the Y axis, driven by motor actuators with `gear=50`
-- **Lidar**: a site on top of the chassis; rays are cast in `sim.py` using `mj_ray` (not a MuJoCo sensor)
-- **IMU**: MuJoCo `accelerometer` + `gyro` sensors attached to the chassis
+## Project structure
 
-### Environment
+```
+mujoco_sim/
+├── main.py           Entry point — handles all commands
+├── vehicle/
+│   └── model.xml     Robot definition (chassis, 4 wheels, LiDAR site, IMU)
+├── worlds/
+│   ├── __init__.py   load_fixed() and load_random()
+│   └── random_gen.py Procedural world generator (reads vehicle/model.xml)
+├── sensors/
+│   ├── imu.py        IMU: accel + gyro with gaussian noise and bias drift
+│   └── lidar.py      LiDAR: 360-ray casting with range noise
+└── mapper.py         Occupancy grid: log-odds Bayesian + Bresenham ray carving
+```
 
-- 20m x 20m ground plane
-- Barrier wall at x=3 (directly in front of spawn)
-- Side walls at y=+4 and y=-4
+`vehicle/model.xml` is the single source of truth for the robot.
+Both the fixed world and random worlds read from it — change the robot once, all worlds get it.
 
-### Sensors
+## Sim → hardware path
 
-**Lidar** (simulated in Python):
-- 180 rays, 360-degree sweep in the XY plane
-- 8m max range
-- 10 Hz sweep rate
-- Self-hits excluded (rays ignore the robot's own body)
-
-**IMU** (MuJoCo sensors):
-- 3-axis accelerometer (body frame)
-- 3-axis gyroscope (body frame)
-- Sampled every physics step (500 Hz at dt=0.002)
-
-## Auto-Drive Output
-
-Running `python mujoco_sim/sim.py` drives the robot on a preset path and saves a 2D lidar map to `mujoco_sim/map_output.png`. The map shows:
-
-- **Green dots**: lidar hit points (walls, barriers)
-- **Blue line**: robot trajectory
-- **Green/red circles**: start/end positions
-
-## Files
-
-| File | Description |
-|------|-------------|
-| `model.xml` | MuJoCo MJCF model (robot + environment) |
-| `sim.py` | Simulation script (lidar raycasting, IMU readout, driving, mapping) |
-| `map_output.png` | Generated 2D lidar map (auto-drive mode) |
-
-## Dependencies
-
-- `mujoco` (includes `mjpython`)
-- `numpy`
-- `matplotlib`
+`IMUSensor` and `LiDARSensor` return typed dataclasses (`IMUReading`, `LiDARScan`).
+`mapper.py` only consumes those dataclasses — no sim-specific code.
+To run on hardware: replace the sensor classes with hardware readers that return the same dataclasses. The mapper and any algorithms on top stay unchanged.

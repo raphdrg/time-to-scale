@@ -1,0 +1,131 @@
+<mujoco model="lidarbot">
+  <compiler angle="degree" coordinate="local"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <map znear="0.01" zfar="50"/>
+    <rgba contactpoint="0 0 0 0" contactforce="0 0 0 0"/>
+  </visual>
+
+  <default>
+    <joint damping="0.5" armature="0.01"/>
+    <geom friction="1.0 0.1 0.1" density="1000"/>
+  </default>
+
+  <asset>
+    <texture type="2d" name="grid" builtin="checker" width="512" height="512"
+             rgb1="0.3 0.3 0.3" rgb2="0.4 0.4 0.4"/>
+    <material name="grid_mat" texture="grid" texrepeat="10 10" texuniform="true"/>
+    <material name="wall_mat" rgba="0.6 0.2 0.2 1"/>
+    <material name="chassis_mat" rgba="0.15 0.15 0.15 1"/>
+    <material name="deck_mat" rgba="0.2 0.2 0.25 1"/>
+    <material name="wheel_mat" rgba="0.08 0.08 0.08 1"/>
+    <material name="caster_mat" rgba="0.5 0.5 0.5 1"/>
+    <material name="lidar_base_mat" rgba="0.1 0.1 0.1 1"/>
+    <material name="lidar_top_mat" rgba="0.05 0.7 0.05 1"/>
+  </asset>
+
+  <worldbody>
+    <geom name="ground" type="plane" size="10 10 0.1" material="grid_mat"/>
+
+    <!-- Barrier wall in front of spawn -->
+    <body name="barrier" pos="3 0 0.5">
+      <geom type="box" size="0.1 2 0.5" material="wall_mat"/>
+    </body>
+    <!-- Side walls -->
+    <body name="wall_left" pos="0 4 0.5">
+      <geom type="box" size="5 0.1 0.5" material="wall_mat"/>
+    </body>
+    <body name="wall_right" pos="0 -4 0.5">
+      <geom type="box" size="5 0.1 0.5" material="wall_mat"/>
+    </body>
+
+    <!--
+      ===== LiDAR Bot =====
+      Based on TheNoobInventor/lidarbot URDF dimensions:
+        Chassis:  0.21 x 0.11 x 0.035 m,  ~0.9 kg
+        Wheels:   radius 0.0325, width 0.025, separation 0.134 m
+        Caster:   radius 0.015 at front
+        LiDAR:    cylinder r=0.037 h=0.021, flat on top of chassis
+        IMU:      at chassis centre
+    -->
+    <body name="base" pos="0 0 0.0325">
+      <joint name="root" type="free"/>
+
+      <!-- Chassis plate -->
+      <geom name="chassis" type="box"
+            size="0.105 0.055 0.0175"
+            pos="0 0 0.0175"
+            mass="0.864" material="chassis_mat"/>
+
+      <!-- Top deck (thin plate where components sit) -->
+      <geom name="deck" type="box"
+            size="0.105 0.055 0.002"
+            pos="0 0 0.037"
+            mass="0.1" material="deck_mat"/>
+
+      <!-- ===== LiDAR (flat on top of chassis, no stick) ===== -->
+      <!-- Base cylinder -->
+      <geom name="lidar_base" type="cylinder"
+            size="0.037 0.008"
+            pos="0.02 0 0.047"
+            mass="0.04" material="lidar_base_mat"/>
+      <!-- Top spinning dome -->
+      <geom name="lidar_top" type="cylinder"
+            size="0.035 0.007"
+            pos="0.02 0 0.062"
+            mass="0.03" material="lidar_top_mat"/>
+
+      <!-- LiDAR raycast site (at lidar centre height) -->
+      <site name="lidar_site" pos="0.02 0 0.055" size="0.005"/>
+
+      <!-- IMU site (chassis centre) -->
+      <site name="imu_site" pos="0 0 0.0175" size="0.005"/>
+
+      <!-- ===== 4 Drive wheels (differential: left pair vs right pair) ===== -->
+      <!-- Front Left -->
+      <body name="wheel_fl" pos="0.065 0.067 0">
+        <joint name="joint_fl" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.0325 0.0125" euler="90 0 0"
+              mass="0.031" material="wheel_mat"
+              friction="1.16 0.1 0.1"/>
+      </body>
+
+      <!-- Front Right -->
+      <body name="wheel_fr" pos="0.065 -0.067 0">
+        <joint name="joint_fr" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.0325 0.0125" euler="90 0 0"
+              mass="0.031" material="wheel_mat"
+              friction="1.16 0.1 0.1"/>
+      </body>
+
+      <!-- Rear Left -->
+      <body name="wheel_rl" pos="-0.065 0.067 0">
+        <joint name="joint_rl" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.0325 0.0125" euler="90 0 0"
+              mass="0.031" material="wheel_mat"
+              friction="1.16 0.1 0.1"/>
+      </body>
+
+      <!-- Rear Right -->
+      <body name="wheel_rr" pos="-0.065 -0.067 0">
+        <joint name="joint_rr" type="hinge" axis="0 1 0"/>
+        <geom type="cylinder" size="0.0325 0.0125" euler="90 0 0"
+              mass="0.031" material="wheel_mat"
+              friction="1.16 0.1 0.1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <accelerometer name="imu_accel" site="imu_site"/>
+    <gyro          name="imu_gyro"  site="imu_site"/>
+  </sensor>
+
+  <actuator>
+    <motor name="motor_fl" joint="joint_fl" gear="20" ctrlrange="-1 1"/>
+    <motor name="motor_fr" joint="joint_fr" gear="20" ctrlrange="-1 1"/>
+    <motor name="motor_rl" joint="joint_rl" gear="20" ctrlrange="-1 1"/>
+    <motor name="motor_rr" joint="joint_rr" gear="20" ctrlrange="-1 1"/>
+  </actuator>
+</mujoco>
