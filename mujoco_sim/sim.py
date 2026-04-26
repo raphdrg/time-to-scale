@@ -1,3 +1,7 @@
+
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 """
 MuJoCo simulation: 4-wheeled mobile base with simulated lidar + IMU.
 
@@ -13,7 +17,9 @@ import time
 import numpy as np
 import mujoco
 import mujoco.viewer
-import matplotlib.pyplot as plt
+
+#DSki Algorithms
+from algorithms import SLAM 
 
 
 # ---------- config ----------
@@ -88,7 +94,28 @@ def auto_drive_policy(t):
         return 0.0, 0.0
 
 
+def hits_to_observations(hits, robot_pos, robot_theta):
+    obs = []
+    for hit in hits:
+        dx = hit[0] - robot_pos[0]
+        dy = hit[1] - robot_pos[1]
+        r = np.sqrt(dx**2 + dy**2)
+        bearing = np.arctan2(dy, dx) - robot_theta
+        obs.append(np.array([r, bearing]))
+    return obs
+
 def run_auto(model, data):
+
+    slam = SLAM({
+        "init_pose": [0.0, 0.0, 0.0],
+        "motion_noise": [0.05, 0.05, 0.01],
+        "obs_noise": [0.1, 0.05],
+        "assoc_threshold": 1.0,
+    })
+
+    prev_pos = np.array([0.0, 0.0])
+    prev_theta = 0.0
+
     accel_adr = model.sensor_adr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel")]
     gyro_adr = model.sensor_adr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")]
     lidar_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "lidar_site")
@@ -101,6 +128,7 @@ def run_auto(model, data):
     all_hits = []
     trajectory = []
     imu_log = []
+    slam_log = []  # <-- initialised here, before the loop
 
     print(f"Running auto-drive for {SIM_DURATION}s ...")
 
@@ -119,6 +147,27 @@ def run_auto(model, data):
             hits = do_lidar_sweep(model, data, lidar_site_id, lidar_dirs, base_body_id)
             if len(hits) > 0:
                 all_hits.append(hits)
+
+                robot_pos = data.site_xpos[lidar_site_id][:2].copy()
+                quat = data.xquat[base_body_id]
+                theta = np.arctan2(2*(quat[0]*quat[3] + quat[1]*quat[2]),
+                                   1 - 2*(quat[2]**2 + quat[3]**2))
+
+                d = robot_pos - prev_pos
+                dx =  np.cos(prev_theta) * d[0] + np.sin(prev_theta) * d[1]
+                dy = -np.sin(prev_theta) * d[0] + np.cos(prev_theta) * d[1]
+                dtheta = theta - prev_theta
+
+                obs = hits_to_observations(hits[::10], robot_pos, theta)
+
+                result = slam.update(np.array([dx, dy, dtheta]), obs)
+                slam_log.append(result)  # <-- collected inside the loop
+
+                print(f"t={data.time:.1f}s | estimated pose: {result['pose'].round(3)}")
+
+                prev_pos = robot_pos
+                prev_theta = theta
+
             next_lidar_time += lidar_period
 
     all_hits = np.concatenate(all_hits, axis=0) if all_hits else np.empty((0, 2))
@@ -129,9 +178,12 @@ def run_auto(model, data):
     print(f"Accel mean: {accels.mean(axis=0).round(3)}")
     print(f"Gyro  mean: {gyros.mean(axis=0).round(3)}")
 
+    import pickle
+    with open("mujoco_sim/slam_log.pkl", "wb") as f:
+        pickle.dump(slam_log, f)
+    print(f"SLAM log saved. {len(slam_log)} frames.")
+
     plot_map(all_hits, trajectory, MAP_SAVE_PATH)
-
-
 # ── Viewer mode ─────────────────────────────────
 
 VIEWER_FPS = 60
@@ -218,6 +270,10 @@ def run_viewer(model, data):
 # ── Plot ────────────────────────────────────────
 
 def plot_map(all_hits, trajectory, save_path):
+    import matplotlib
+    matplotlib.use("Agg")  # must be set before importing pyplot — no GUI, safe on all threads
+    import matplotlib.pyplot as plt
+
     fig, ax = plt.subplots(figsize=(10, 10))
     if len(all_hits) > 0:
         ax.scatter(all_hits[:, 0], all_hits[:, 1], s=0.3, c="lime", alpha=0.6, label="lidar hits")
@@ -234,7 +290,7 @@ def plot_map(all_hits, trajectory, save_path):
     ax.grid(True, alpha=0.2)
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"Map saved -> {save_path}")
-    plt.show()
+    # plt.show() removed — not safe inside mjpython; open the saved file instead
 
 
 def main():
