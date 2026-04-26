@@ -135,25 +135,31 @@ def run_auto(model, data):
 # ── Viewer mode ─────────────────────────────────
 
 VIEWER_FPS = 60
-IMPULSE_FRAMES = 15  # how many frames each key press drives for (~0.25s)
 
 
 def run_viewer(model, data):
-    # Each key gets a countdown: when > 0 the command is active
-    impulse = {"fwd": 0, "turn": 0}
+    # Toggle state: press to start, press again to stop
+    active = {"fwd": False, "back": False, "left": False, "right": False}
 
     def key_callback(keycode):
-        if keycode == 87:    # W
-            impulse["fwd"] = IMPULSE_FRAMES
-        elif keycode == 83:  # S
-            impulse["fwd"] = -IMPULSE_FRAMES
-        elif keycode == 65:  # A — turn left
-            impulse["turn"] = -IMPULSE_FRAMES
-        elif keycode == 68:  # D — turn right
-            impulse["turn"] = IMPULSE_FRAMES
+        # GLFW arrow keys: UP=265 DOWN=264 LEFT=263 RIGHT=262
+        if keycode == 265:      # UP — toggle forward
+            active["fwd"] = not active["fwd"]
+            active["back"] = False   # cancel opposite
+        elif keycode == 264:    # DOWN — toggle backward
+            active["back"] = not active["back"]
+            active["fwd"] = False
+        elif keycode == 263:    # LEFT — toggle turn left
+            active["left"] = not active["left"]
+            active["right"] = False
+        elif keycode == 262:    # RIGHT — toggle turn right
+            active["right"] = not active["right"]
+            active["left"] = False
+        elif keycode == 32:     # SPACE — stop everything
+            active["fwd"] = active["back"] = active["left"] = active["right"] = False
 
-    print("WASD to drive (tap). Close window to exit.")
-    print("  W/S = nudge forward/back    A/D = nudge left/right")
+    print("Arrow keys to drive (toggle on/off). SPACE = stop all.")
+    print("  UP/DOWN = forward/back    LEFT/RIGHT = turn")
 
     steps_per_frame = int(1.0 / (model.opt.timestep * VIEWER_FPS))
     base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base")
@@ -171,30 +177,12 @@ def run_viewer(model, data):
             while viewer.is_running():
                 t0 = time.time()
 
-                # Force all debug visualization off every frame
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTFORCE] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_INERTIA] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONSTRAINT] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = False
-                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTOBJ] = False
-
                 fwd = 0.0
                 turn = 0.0
-                if impulse["fwd"] > 0:
-                    fwd = DRIVE_CTRL
-                    impulse["fwd"] -= 1
-                elif impulse["fwd"] < 0:
-                    fwd = -DRIVE_CTRL
-                    impulse["fwd"] += 1
-
-                if impulse["turn"] > 0:
-                    turn = TURN_CTRL
-                    impulse["turn"] -= 1
-                elif impulse["turn"] < 0:
-                    turn = -TURN_CTRL
-                    impulse["turn"] += 1
+                if active["fwd"]:   fwd += DRIVE_CTRL
+                if active["back"]:  fwd -= DRIVE_CTRL
+                if active["left"]:  turn -= TURN_CTRL
+                if active["right"]: turn += TURN_CTRL
 
                 set_drive(data, fwd, turn)
 
