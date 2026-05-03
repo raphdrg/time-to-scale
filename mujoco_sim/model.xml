@@ -23,6 +23,8 @@
     <material name="caster_mat" rgba="0.5 0.5 0.5 1"/>
     <material name="lidar_base_mat" rgba="0.1 0.1 0.1 1"/>
     <material name="lidar_top_mat" rgba="0.05 0.7 0.05 1"/>
+    <material name="imu_pcb_mat" rgba="0.1 0.15 0.6 1"/>
+    <material name="imu_chip_mat" rgba="0.2 0.2 0.2 1"/>
   </asset>
 
   <worldbody>
@@ -47,7 +49,7 @@
         Wheels:   radius 0.0325, width 0.025, separation 0.134 m
         Caster:   radius 0.015 at front
         LiDAR:    cylinder r=0.037 h=0.021, flat on top of chassis
-        IMU:      at chassis centre
+        IMU:      MPU6050 breakout on deck, behind lidar
     -->
     <body name="base" pos="0 0 0.0325">
       <joint name="root" type="free"/>
@@ -79,8 +81,19 @@
       <!-- LiDAR raycast site (at lidar centre height) -->
       <site name="lidar_site" pos="0.02 0 0.055" size="0.005"/>
 
-      <!-- IMU site (chassis centre) -->
-      <site name="imu_site" pos="0 0 0.0175" size="0.005"/>
+      <!-- ===== IMU (MPU6050 breakout, behind lidar on deck) ===== -->
+      <!-- PCB board: ~20x16x1.5mm, classic blue breakout -->
+      <geom name="imu_pcb" type="box"
+            size="0.010 0.008 0.00075"
+            pos="-0.02 0 0.0405"
+            mass="0.005" material="imu_pcb_mat"/>
+      <!-- Chip on top of PCB -->
+      <geom name="imu_chip" type="box"
+            size="0.004 0.004 0.001"
+            pos="-0.02 0 0.0425"
+            mass="0.002" material="imu_chip_mat"/>
+      <!-- IMU sensor site (on the chip) -->
+      <site name="imu_site" pos="-0.02 0 0.042" size="0.003"/>
 
       <!-- ===== 4 Drive wheels (differential: left pair vs right pair) ===== -->
       <!-- Front Left -->
